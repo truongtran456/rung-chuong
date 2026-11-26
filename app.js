@@ -43,7 +43,7 @@ const Sync = {
 
     connect(roomCode) {
         return new Promise(resolve => {
-            const hostId = 'rcv-' + roomCode;
+            const hostId = 'pm-' + roomCode;
             try {
                 this.peer?.destroy();
                 this.peer = new Peer(undefined, {
