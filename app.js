@@ -382,6 +382,19 @@ function startCountdown(seconds) {
     appState.countdownTimer = setInterval(() => {
         left--;
         tick();
+        // Âm thanh tick đếm ngược
+        if (left <= 3 && left > 0) {
+            try {
+                const ctx = playSound._ctx || (playSound._ctx = new (window.AudioContext || window.webkitAudioContext)());
+                if (ctx.state === 'suspended') ctx.resume();
+                const now = ctx.currentTime;
+                const o = ctx.createOscillator(), g = ctx.createGain();
+                o.connect(g); g.connect(ctx.destination);
+                o.type = 'square'; o.frequency.value = 880;
+                g.gain.setValueAtTime(0.1, now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+                o.start(now); o.stop(now + 0.08);
+            } catch (_) {}
+        }
         if (left <= 0) stopCountdown();
     }, 1000);
 }
