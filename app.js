@@ -40,6 +40,7 @@ function getCurrentQuestion(s) { return s?.questions?.[s.currentQuestionIndex] |
 const Sync = {
     peer: null, conn: null, onMsg: null,
     reconnectLoop: null, pollLoop: null,
+    _heartbeatLoop: null,
 
     connect(roomCode) {
         return new Promise(resolve => {
@@ -47,19 +48,40 @@ const Sync = {
             try {
                 this.peer?.destroy();
                 this.peer = new Peer(undefined, {
-                    debug: 1,
-                    config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+                    debug: 0,
+                    config: { iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' }
+                    ]}
                 });
                 this.peer.on('open', () => {
                     const conn = this.peer.connect(hostId, { reliable: true });
                     let done = false;
                     const finish = ok => { if (!done) { done = true; resolve(ok); } };
-                    conn.on('open',  () => { this.conn = conn; conn.on('data', d => this._handle(d)); finish(true); });
+                    conn.on('open',  () => {
+                        this.conn = conn;
+                        conn.on('data', d => this._handle(d));
+                        conn.on('close', () => {
+                            this.conn = null;
+                            // Tự reconnect sau 2s nếu mất kết nối
+                            setTimeout(() => this._tryReconnect(roomCode), 2000);
+                        });
+                        finish(true);
+                    });
                     conn.on('error', () => finish(false));
-                    setTimeout(() => finish(false), 10000);
+                    setTimeout(() => finish(false), 12000);
                 });
                 this.peer.on('error', () => resolve(false));
             } catch { resolve(false); }
+        });
+    },
+
+    _tryReconnect(roomCode) {
+        if (this.conn?.open) return;
+        this.connect(roomCode).then(ok => {
+            if (ok) {
+                this.send({ type: 'REQUEST_STATE' });
+            }
         });
     },
 
@@ -68,6 +90,7 @@ const Sync = {
     destroy()    {
         clearInterval(this.reconnectLoop);
         clearInterval(this.pollLoop);
+        clearInterval(this._heartbeatLoop);
         this.conn?.close(); this.peer?.destroy();
         this.conn = null; this.peer = null;
     }
@@ -110,16 +133,16 @@ async function joinRoom(code) {
         return;
     }
 
-    // Kết nối OK — xin trạng thái
+    // Kết nối OK — xin trạng thái ngay
     Sync.send({ type: 'REQUEST_STATE' });
 
-    // Poll định kỳ cho đến khi nhận được data
+    // Poll mỗi 1.5s cho đến khi có data và đã vào game
     Sync.pollLoop = setInterval(() => {
-        if (appState.sessionDataReady) { clearInterval(Sync.pollLoop); return; }
+        if (!Sync.conn?.open) return;
         Sync.send({ type: 'REQUEST_STATE' });
-    }, 2000);
+    }, 1500);
 
-    // Reconnect nếu mất kết nối
+    // Reconnect vòng ngoài — phòng khi peer destroy
     Sync.reconnectLoop = setInterval(async () => {
         if (Sync.conn?.open) return;
         const r = await Sync.connect(code);
