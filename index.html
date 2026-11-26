@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Rung Chuông Vàng — Học sinh</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;600;700&family=Oswald:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+    <!-- ===== NHẬP MÃ PHÒNG ===== -->
+    <section id="view-enter-code" class="view active">
+        <div class="sv-logo">🔔</div>
+        <h1 class="sv-title">RUNG CHUÔNG VÀNG</h1>
+        <p class="sv-sub">Nhập mã phòng để vào thi</p>
+        <div class="sv-card">
+            <label class="sv-label">Mã phòng</label>
+            <input type="text" id="room-code-input" class="sv-input sv-input-big"
+                   placeholder="VD: AB123" autocomplete="off" autocapitalize="characters"
+                   spellcheck="false" maxlength="10">
+            <button class="sv-btn sv-btn-gold" id="btn-join-room">Vào phòng →</button>
+        </div>
+        <div id="enter-code-status" class="sv-status"></div>
+    </section>
+
+    <!-- ===== CHỌN TÊN ===== -->
+    <section id="view-pick-name" class="view">
+        <div class="sv-logo small">🔔</div>
+        <h1 class="sv-title">RUNG CHUÔNG VÀNG</h1>
+        <div class="sv-room-badge" id="pick-room-badge">Phòng: —</div>
+        <p class="sv-sub">Chọn tên của bạn</p>
+        <div id="student-name-list" class="sv-name-grid"></div>
+        <div id="pick-name-status" class="sv-status"></div>
+    </section>
+
+    <!-- ===== PHÒNG CHỜ ===== -->
+    <section id="view-waiting" class="view">
+        <div class="sv-logo">🔔</div>
+        <h1 class="sv-title">RUNG CHUÔNG VÀNG</h1>
+        <div class="sv-room-badge" id="wait-room-badge">Phòng: —</div>
+        <div class="sv-wait-card">
+            <div class="sv-wait-name" id="wait-student-name">—</div>
+            <div class="sv-wait-label">Đang chờ giáo viên bắt đầu...</div>
+            <div class="sv-wait-spinner"></div>
+        </div>
+    </section>
+
+    <!-- ===== CÂU HỎI ===== -->
+    <section id="view-question" class="view">
+        <div class="sv-q-header">
+            <span class="sv-q-info" id="q-room-info">Phòng: —</span>
+            <span class="sv-q-num" id="q-num-label">Câu 1/1</span>
+            <div class="sv-countdown-wrap">
+                <svg class="sv-ring" viewBox="0 0 36 36">
+                    <circle cx="18" cy="18" r="14" class="sv-ring-bg"/>
+                    <circle cx="18" cy="18" r="14" class="sv-ring-fill" id="sv-ring-fill"/>
+                </svg>
+                <span id="sv-countdown" class="sv-countdown-num">15</span>
+            </div>
+        </div>
+        <div class="sv-question-card" id="sv-question-text">Đang tải...</div>
+        <div id="sv-question-image" class="sv-question-image"></div>
+        <div class="sv-answers-grid" id="sv-answers"></div>
+        <div id="sv-submitted-banner" class="sv-submitted-banner hidden">
+            <span id="sv-submitted-text">✅ Đã nộp đáp án</span>
+        </div>
+        <div id="sv-status-bar" class="sv-status-bar"></div>
+    </section>
+
+    <!-- ===== KẾT QUẢ CÂU ===== -->
+    <section id="view-result" class="view">
+        <div class="sv-q-header">
+            <span class="sv-q-info" id="res-room-info">Phòng: —</span>
+            <span class="sv-q-num" id="res-num-label">Câu 1/1</span>
+        </div>
+        <div class="sv-result-banner" id="sv-result-banner"></div>
+        <div class="sv-result-answers" id="sv-result-answers"></div>
+        <div class="sv-result-score-row">
+            <span class="sv-result-score-label">Điểm của bạn:</span>
+            <span class="sv-result-score-val" id="sv-score-val">0</span>
+        </div>
+        <div class="sv-wait-label" style="text-align:center;margin-top:.5rem">
+            Chờ giáo viên sang câu tiếp...
+        </div>
+    </section>
+
+    <!-- ===== KẾT THÚC ===== -->
+    <section id="view-ended" class="view">
+        <div class="sv-logo">🏆</div>
+        <h1 class="sv-title">KẾT THÚC</h1>
+        <div class="sv-wait-card">
+            <div class="sv-wait-name" id="end-student-name">—</div>
+            <div class="sv-end-score-row">
+                <span class="sv-end-score-label">Điểm tổng:</span>
+                <span class="sv-end-score-val" id="end-score-val">0</span>
+            </div>
+            <div class="sv-end-correct" id="end-correct-info"></div>
+        </div>
+        <p class="sv-sub" style="margin-top:1rem">Cảm ơn bạn đã tham gia! 🎉</p>
+        <button class="sv-btn sv-btn-gold" style="margin-top:1rem;max-width:300px" onclick="location.reload()">
+            Chơi lại
+        </button>
+    </section>
+
+</div>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
