@@ -138,3 +138,10 @@ body::before {
     .sv-result-answers { grid-template-columns: 1fr; }
     .sv-title { font-size: 1.3rem; }
 }
+
+/* animations */
+@keyframes slideIn { from{opacity:0;transform:translateX(-12px)} to{opacity:1;transform:translateX(0)} }
+.sv-countdown-num.urgent-num { animation: urgentPulse .5s ease infinite alternate; color:#ff6060; }
+@keyframes urgentPulse { from{transform:scale(1)} to{transform:scale(1.2)} }
+.sv-ans-btn { transition: transform .1s, box-shadow .15s, opacity .15s; }
+.sv-ans-btn:hover:not(:disabled) { filter: brightness(1.1); transform: scale(1.02); }

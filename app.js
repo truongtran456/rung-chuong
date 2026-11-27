@@ -2,14 +2,14 @@
 
 /* ============================================================
    RUNG CHUÔNG VÀNG v3 — Student App (Phòng Máy / Online)
-   Deploy riêng trên Vercel, học sinh vào bằng QR hoặc link.
-   Luồng: nhập mã phòng → chọn tên → chờ → câu hỏi → kết quả
+   Deploy: https://rung-chuong.vercel.app
+   Flow: ?room=CODE → kết nối PeerJS → chọn tên → thi A/B/C/D
    ============================================================ */
 
 const SESSION_STATUS = {
-    WAITING: 'WAITING', CONNECTED: 'CONNECTED',
-    QUESTION_ACTIVE: 'QUESTION_ACTIVE', QUESTION_LOCKED: 'QUESTION_LOCKED',
-    QUESTION_RESULT: 'QUESTION_RESULT', COMPLETED: 'COMPLETED', RANKING: 'RANKING'
+    WAITING:'WAITING', CONNECTED:'CONNECTED',
+    QUESTION_ACTIVE:'QUESTION_ACTIVE', QUESTION_LOCKED:'QUESTION_LOCKED',
+    QUESTION_RESULT:'QUESTION_RESULT', COMPLETED:'COMPLETED', RANKING:'RANKING'
 };
 
 const appState = {
@@ -18,29 +18,65 @@ const appState = {
     myStudentId: null,
     myStudentName: null,
     countdownTimer: null,
+    countdownEndTime: 0,       // timestamp khi hết giờ
     myAnswer: null,
     questionAnswered: false,
     sessionDataReady: false,
     myTotalScore: 0,
-    myCorrect: 0
+    myCorrect: 0,
+    currentQId: null           // track câu đang hiển thị
 };
 
 /* ===== UTILS ===== */
-function $(sel) { return document.querySelector(sel); }
-function $$(sel) { return document.querySelectorAll(sel); }
-function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function $(s){ return document.querySelector(s); }
+function $$(s){ return document.querySelectorAll(s); }
+function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function getCurrentQuestion(s){ return s?.questions?.[s.currentQuestionIndex] || null; }
 
-function showView(id) {
+function showView(id){
     $$('.view').forEach(v => v.classList.remove('active'));
     document.getElementById('view-' + id)?.classList.add('active');
 }
-function getCurrentQuestion(s) { return s?.questions?.[s.currentQuestionIndex] || null; }
+
+/* ===== SOUND (simple, mobile-safe) ===== */
+const Sound = {
+    _ctx: null,
+    _get() {
+        if (!this._ctx) {
+            try { this._ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch(_){}
+        }
+        if (this._ctx?.state === 'suspended') this._ctx.resume().catch(()=>{});
+        return this._ctx;
+    },
+    beep(freq, dur, type='sine', vol=0.15) {
+        try {
+            const ctx = this._get(); if (!ctx) return;
+            const o = ctx.createOscillator(), g = ctx.createGain();
+            o.connect(g); g.connect(ctx.destination);
+            o.type = type; o.frequency.value = freq;
+            const now = ctx.currentTime;
+            g.gain.setValueAtTime(vol, now);
+            g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+            o.start(now); o.stop(now + dur);
+        } catch(_){}
+    },
+    play(type) {
+        const map = {
+            correct:  () => { this.beep(523,.1,'triangle',.18); setTimeout(()=>this.beep(659,.1,'triangle',.18),80); setTimeout(()=>this.beep(784,.15,'triangle',.18),160); setTimeout(()=>this.beep(1047,.4,'triangle',.18),250); },
+            wrong:    () => { this.beep(400,.15,'sawtooth',.12); setTimeout(()=>this.beep(300,.15,'sawtooth',.1),120); setTimeout(()=>this.beep(220,.3,'sawtooth',.08),250); },
+            scan:     () => { this.beep(880,.08,'sine',.15); setTimeout(()=>this.beep(1200,.1,'sine',.12),80); },
+            tick:     () => { this.beep(1200,.05,'square',.08); },
+            urgent:   () => { this.beep(880,.08,'square',.1); setTimeout(()=>this.beep(880,.08,'square',.08),150); },
+            bell:     () => { this.beep(783,.2,'sine',.2); setTimeout(()=>this.beep(1046,.2,'sine',.2),160); setTimeout(()=>this.beep(1318,.5,'sine',.18),320); },
+        };
+        map[type]?.();
+    }
+};
 
 /* ===== PEERJS SYNC ===== */
 const Sync = {
     peer: null, conn: null, onMsg: null,
     reconnectLoop: null, pollLoop: null,
-    _heartbeatLoop: null,
 
     connect(roomCode) {
         return new Promise(resolve => {
@@ -58,12 +94,12 @@ const Sync = {
                     const conn = this.peer.connect(hostId, { reliable: true });
                     let done = false;
                     const finish = ok => { if (!done) { done = true; resolve(ok); } };
-                    conn.on('open',  () => {
+                    conn.on('open', () => {
                         this.conn = conn;
-                        conn.on('data', d => this._handle(d));
+                        conn.on('data', d => { if (this.onMsg) this.onMsg(d); });
                         conn.on('close', () => {
                             this.conn = null;
-                            // Tự reconnect sau 2s nếu mất kết nối
+                            // Tự reconnect sau 2s
                             setTimeout(() => this._tryReconnect(roomCode), 2000);
                         });
                         finish(true);
@@ -76,21 +112,18 @@ const Sync = {
         });
     },
 
-    _tryReconnect(roomCode) {
+    _tryReconnect(code) {
         if (this.conn?.open) return;
-        this.connect(roomCode).then(ok => {
-            if (ok) {
-                this.send({ type: 'REQUEST_STATE' });
-            }
+        this.connect(code).then(ok => {
+            if (ok) this.send({ type: 'REQUEST_STATE' });
         });
     },
 
-    _handle(msg) { if (this.onMsg) this.onMsg(msg); },
-    send(msg)    { if (this.conn?.open) this.conn.send(msg); },
-    destroy()    {
+    send(msg) { if (this.conn?.open) this.conn.send(msg); },
+
+    destroy() {
         clearInterval(this.reconnectLoop);
         clearInterval(this.pollLoop);
-        clearInterval(this._heartbeatLoop);
         this.conn?.close(); this.peer?.destroy();
         this.conn = null; this.peer = null;
     }
@@ -102,16 +135,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const roomParam = params.get('room');
 
     if (roomParam) {
-        // Vào thẳng từ link / QR
         joinRoom(roomParam.toUpperCase());
     } else {
         showView('enter-code');
     }
 
-    // Nút vào phòng
     $('#btn-join-room')?.addEventListener('click', () => {
         const code = ($('#room-code-input')?.value || '').trim().toUpperCase();
-        if (!code) { setStatus('enter-code', 'Nhập mã phòng', 'error'); return; }
+        if (!code) { setStatus('enter-code', 'Nhập mã phòng!', 'error'); return; }
         joinRoom(code);
     });
     $('#room-code-input')?.addEventListener('keydown', e => {
@@ -123,7 +154,6 @@ document.addEventListener('DOMContentLoaded', () => {
 async function joinRoom(code) {
     appState.roomCode = code;
     setStatus('enter-code', 'Đang kết nối tới phòng ' + code + '...', '');
-    showView('enter-code');
 
     Sync.onMsg = handleMessage;
     const ok = await Sync.connect(code);
@@ -133,39 +163,40 @@ async function joinRoom(code) {
         return;
     }
 
-    // Kết nối OK — xin trạng thái ngay
+    // Kết nối OK — xin state ngay
     Sync.send({ type: 'REQUEST_STATE' });
 
-    // Poll mỗi 1.5s cho đến khi có data và đã vào game
+    // Poll mỗi 1.5s — đảm bảo luôn đồng bộ
     Sync.pollLoop = setInterval(() => {
-        if (!Sync.conn?.open) return;
-        Sync.send({ type: 'REQUEST_STATE' });
+        if (Sync.conn?.open) Sync.send({ type: 'REQUEST_STATE' });
     }, 1500);
 
-    // Reconnect vòng ngoài — phòng khi peer destroy
+    // Reconnect loop ngoài
     Sync.reconnectLoop = setInterval(async () => {
         if (Sync.conn?.open) return;
         const r = await Sync.connect(code);
-        if (r) { Sync.send({ type: 'REQUEST_STATE' }); }
+        if (r) Sync.send({ type: 'REQUEST_STATE' });
     }, 8000);
 }
 
 /* ===== MESSAGE HANDLER ===== */
 function handleMessage(msg) {
     if (!msg?.type) return;
+
     const prevStatus = appState.session?.status;
     const prevQIdx   = appState.session?.currentQuestionIndex;
 
+    // Merge session mới
     if (msg.session) {
         appState.session = JSON.parse(JSON.stringify(msg.session));
         appState.sessionDataReady = true;
     }
 
     const s = appState.session;
-    if (!s) return;
+    if (!s?.students?.length) return;
 
-    // Nhận xong danh sách HS → hiện picker tên nếu chưa chọn
-    if (!appState.myStudentId && s.students?.length) {
+    // Chưa chọn tên → hiện picker
+    if (!appState.myStudentId) {
         showPickName(s);
         return;
     }
@@ -183,13 +214,14 @@ function handleMessage(msg) {
             // Câu mới → reset đáp án
             appState.myAnswer = null;
             appState.questionAnswered = false;
-            if (appState.myStudentId) showQuestion(s);
+            appState.currentQId = getCurrentQuestion(s)?.id || null;
+            showQuestion(s);
             break;
 
         case 'QUESTION_RESULT':
         case 'QUESTION_LOCKED':
             stopCountdown();
-            if (appState.myStudentId) showResult(s);
+            showResult(s);
             break;
 
         case 'SESSION_COMPLETED':
@@ -198,7 +230,7 @@ function handleMessage(msg) {
             break;
 
         default:
-            if (qChanged && appState.myStudentId) routeByStatus(s);
+            if (qChanged) routeByStatus(s);
     }
 }
 
@@ -210,6 +242,12 @@ function routeByStatus(s) {
             showWaiting();
             break;
         case SESSION_STATUS.QUESTION_ACTIVE:
+            // Chỉ show câu hỏi nếu là câu mới hoặc chưa đang show
+            if (appState.currentQId !== getCurrentQuestion(s)?.id) {
+                appState.myAnswer = null;
+                appState.questionAnswered = false;
+                appState.currentQId = getCurrentQuestion(s)?.id || null;
+            }
             showQuestion(s);
             break;
         case SESSION_STATUS.QUESTION_RESULT:
@@ -245,7 +283,10 @@ function showPickName(session) {
     }).join('');
 
     grid.querySelectorAll('.sv-name-btn:not([disabled])').forEach(btn => {
-        btn.addEventListener('click', () => pickName(btn.dataset.id, btn.dataset.name));
+        btn.addEventListener('click', () => {
+            Sound.play('scan');
+            pickName(btn.dataset.id, btn.dataset.name);
+        });
     });
 }
 
@@ -253,20 +294,18 @@ function pickName(id, name) {
     appState.myStudentId = id;
     appState.myStudentName = name;
 
-    // Thông báo host
-    Sync.send({
-        type: 'STUDENT_JOINED',
-        studentId: id,
-        name: name,
-        roomCode: appState.roomCode
-    });
+    Sync.send({ type: 'STUDENT_JOINED', studentId: id, name, roomCode: appState.roomCode });
 
-    // Nếu game đã active → show câu ngay
     const s = appState.session;
     if (s?.status === SESSION_STATUS.QUESTION_ACTIVE) {
         appState.myAnswer = null;
         appState.questionAnswered = false;
+        appState.currentQId = getCurrentQuestion(s)?.id || null;
         showQuestion(s);
+    } else if (s?.status === SESSION_STATUS.QUESTION_RESULT || s?.status === SESSION_STATUS.QUESTION_LOCKED) {
+        showResult(s);
+    } else if (s?.status === SESSION_STATUS.COMPLETED) {
+        showEnded(s);
     } else {
         showWaiting();
     }
@@ -285,20 +324,22 @@ function showQuestion(session) {
     if (!q) return;
 
     showView('question');
+
     const qIdx   = session.currentQuestionIndex;
     const qTotal = session.questions.length;
+    const timePerQ = session.gameSettings?.timePerQuestion || 15;
 
     $('#q-room-info').textContent  = 'Phòng: ' + (appState.roomCode || session.id);
     $('#q-num-label').textContent  = `Câu ${qIdx + 1}/${qTotal}`;
     $('#sv-submitted-banner').classList.add('hidden');
     $('#sv-status-bar').textContent = '';
 
-    // Câu hỏi
+    // Nội dung câu hỏi
     $('#sv-question-text').textContent = q.question || '';
     const imgEl = $('#sv-question-image');
     if (imgEl) imgEl.innerHTML = q.questionImage ? `<img src="${q.questionImage}" alt="">` : '';
 
-    // Đáp án
+    // 4 đáp án
     const answersEl = $('#sv-answers');
     if (answersEl) {
         answersEl.innerHTML = ['A','B','C','D'].map(letter => {
@@ -310,12 +351,13 @@ function showQuestion(session) {
                     </button>`;
         }).join('');
 
+        // Bind click — dùng appState.session để luôn có session mới nhất
         answersEl.querySelectorAll('.sv-ans-btn').forEach(btn => {
-            btn.addEventListener('click', () => onAnswer(btn.dataset.letter, session));
+            btn.addEventListener('click', () => onAnswer(btn.dataset.letter));
         });
     }
 
-    // Nếu đã nộp rồi → lock lại
+    // Nếu đã nộp rồi (từ state sync) → lock
     const existing = session.answers?.find(
         a => a.questionId === q.id && a.studentId === appState.myStudentId
     );
@@ -325,82 +367,124 @@ function showQuestion(session) {
         showSubmittedBanner(existing.answer);
         disableButtons();
         stopCountdown();
+        // Vẫn hiện countdown đếm ngược thời gian còn lại dựa vào _qStartedAt
+        if (session._qStartedAt) {
+            const elapsed = Date.now() - session._qStartedAt;
+            const remaining = Math.max(0, timePerQ - Math.floor(elapsed / 1000));
+            if (remaining > 0) startCountdown(remaining, timePerQ);
+        }
     } else {
-        // Bắt đầu đếm ngược
-        startCountdown(session.gameSettings?.timePerQuestion || 15);
+        // Tính remaining từ _qStartedAt nếu có
+        if (session._qStartedAt) {
+            const elapsed = Date.now() - session._qStartedAt;
+            const remaining = Math.max(1, timePerQ - Math.floor(elapsed / 1000));
+            startCountdown(remaining, timePerQ);
+        } else {
+            startCountdown(timePerQ, timePerQ);
+        }
     }
 }
 
-function onAnswer(letter, session) {
+/* ===== ANSWER ===== */
+function onAnswer(letter) {
     if (appState.questionAnswered) return;
+
+    const session = appState.session;
+    if (!session) return;
+
+    const q = getCurrentQuestion(session);
+    if (!q) return;
+
+    // Kiểm tra session vẫn còn active
+    if (session.status !== SESSION_STATUS.QUESTION_ACTIVE) return;
+
     appState.myAnswer = letter;
     appState.questionAnswered = true;
 
-    // Highlight
-    $$('.sv-ans-btn').forEach(b => b.classList.toggle('selected', b.dataset.letter === letter));
+    // Visual feedback ngay lập tức
+    $$('.sv-ans-btn').forEach(b => {
+        b.classList.toggle('selected', b.dataset.letter === letter);
+    });
     disableButtons();
     showSubmittedBanner(letter);
     stopCountdown();
+    Sound.play('scan');
 
     // Gửi về host
-    const q = getCurrentQuestion(session);
     Sync.send({
         type: 'ANSWER_SCANNED',
         studentId: appState.myStudentId,
         answer: letter,
-        questionId: q?.id,
+        questionId: q.id,
         submittedAt: Date.now(),
         questionStartedAt: session._qStartedAt || null
     });
 
-    $('#sv-status-bar').textContent = '✓ Đã gửi đáp án';
+    $('#sv-status-bar').textContent = '✓ Đã gửi đáp án thành công';
 }
 
 function showSubmittedBanner(letter) {
     const b = $('#sv-submitted-banner');
-    if (b) { b.classList.remove('hidden'); $('#sv-submitted-text').textContent = `✅ Đã chọn: ${letter}`; }
+    if (!b) return;
+    b.classList.remove('hidden');
+    $('#sv-submitted-text').textContent = `✅ Đã chọn: ${letter}`;
 }
-function disableButtons() { $$('.sv-ans-btn').forEach(b => { b.disabled = true; }); }
 
-/* ===== COUNTDOWN ===== */
-function startCountdown(seconds) {
+function disableButtons() {
+    $$('.sv-ans-btn').forEach(b => { b.disabled = true; });
+}
+
+/* ===== COUNTDOWN — dùng requestAnimationFrame, chống throttle ===== */
+function startCountdown(seconds, totalSeconds) {
     stopCountdown();
-    let left = seconds;
+    if (seconds <= 0) return;
+
+    const total = totalSeconds || seconds;
+    const endTime = Date.now() + seconds * 1000;
     const C = 2 * Math.PI * 14; // r=14 → 87.96
 
-    const tick = () => {
+    // Dùng rAF thay vì setInterval để không bị throttle
+    let lastSecond = seconds;
+
+    const frame = () => {
+        const remaining = Math.max(0, (endTime - Date.now()) / 1000);
+        const leftInt = Math.ceil(remaining);
+
         const numEl  = $('#sv-countdown');
         const ringEl = $('#sv-ring-fill');
-        if (numEl)  numEl.textContent = left;
+
+        if (numEl) {
+            numEl.textContent = leftInt;
+            numEl.classList.toggle('urgent-num', leftInt <= 5);
+        }
         if (ringEl) {
-            ringEl.style.strokeDashoffset = C * (1 - left / seconds);
-            ringEl.classList.toggle('urgent', left <= 5);
+            const fraction = remaining / total;
+            ringEl.style.strokeDashoffset = C * (1 - fraction);
+            ringEl.classList.toggle('urgent', leftInt <= 5);
+        }
+
+        // Tick sound khi sang giây mới
+        if (leftInt < lastSecond) {
+            lastSecond = leftInt;
+            if (leftInt > 0 && leftInt <= 3) Sound.play('urgent');
+            else if (leftInt > 0 && leftInt <= 10) Sound.play('tick');
+        }
+
+        if (remaining > 0) {
+            appState.countdownTimer = requestAnimationFrame(frame);
+        } else {
+            stopCountdown();
         }
     };
 
-    tick();
-    appState.countdownTimer = setInterval(() => {
-        left--;
-        tick();
-        // Âm thanh tick đếm ngược
-        if (left <= 3 && left > 0) {
-            try {
-                const ctx = playSound._ctx || (playSound._ctx = new (window.AudioContext || window.webkitAudioContext)());
-                if (ctx.state === 'suspended') ctx.resume();
-                const now = ctx.currentTime;
-                const o = ctx.createOscillator(), g = ctx.createGain();
-                o.connect(g); g.connect(ctx.destination);
-                o.type = 'square'; o.frequency.value = 880;
-                g.gain.setValueAtTime(0.1, now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-                o.start(now); o.stop(now + 0.08);
-            } catch (_) {}
-        }
-        if (left <= 0) stopCountdown();
-    }, 1000);
+    appState.countdownTimer = requestAnimationFrame(frame);
 }
 
 function stopCountdown() {
-    if (appState.countdownTimer) { clearInterval(appState.countdownTimer); appState.countdownTimer = null; }
+    if (appState.countdownTimer) {
+        cancelAnimationFrame(appState.countdownTimer);
+        appState.countdownTimer = null;
+    }
 }
 
 /* ===== RESULT ===== */
@@ -415,19 +499,22 @@ function showResult(session) {
     $('#res-room-info').textContent = 'Phòng: ' + (appState.roomCode || session.id);
     $('#res-num-label').textContent = `Câu ${qIdx + 1}/${qTotal}`;
 
-    const myAns    = appState.myAnswer;
+    const myAns     = appState.myAnswer;
     const isCorrect = myAns === q.correctAnswer;
-    const noAns    = !myAns;
+    const noAns     = !myAns;
 
-    // Banner
+    // Banner kết quả
     const banner = $('#sv-result-banner');
     if (banner) {
-        if (noAns)      { banner.textContent = '⏰ Hết giờ!';                 banner.className = 'sv-result-banner timeout'; }
-        else if (isCorrect) { banner.textContent = '✅ CHÍNH XÁC!';            banner.className = 'sv-result-banner correct'; }
-        else                { banner.textContent = `❌ Sai! Đúng là: ${q.correctAnswer}`; banner.className = 'sv-result-banner wrong'; }
+        if (noAns)          { banner.textContent = '⏰ Hết giờ!';                     banner.className = 'sv-result-banner timeout'; }
+        else if (isCorrect) { banner.textContent = '✅ CHÍNH XÁC!';                    banner.className = 'sv-result-banner correct'; }
+        else                { banner.textContent = `❌ Sai rồi! Đúng là: ${q.correctAnswer}`; banner.className = 'sv-result-banner wrong'; }
     }
 
-    // 4 đáp án với highlight
+    if (isCorrect)  Sound.play('correct');
+    else if (!noAns) Sound.play('wrong');
+
+    // 4 đáp án với highlight kết quả
     const resEl = $('#sv-result-answers');
     if (resEl) {
         resEl.innerHTML = ['A','B','C','D'].map(letter => {
@@ -435,25 +522,25 @@ function showResult(session) {
             const isCorrectAns = letter === q.correctAnswer;
             const isMyWrong    = letter === myAns && !isCorrectAns;
             const cls = isCorrectAns ? 'correct-ans' : isMyWrong ? 'my-ans-wrong' : 'other';
-            return `<div class="sv-res-ans-item ${cls}">
+            return `<div class="sv-res-ans-item ${cls}" style="animation:slideIn .3s ease both;animation-delay:${['A','B','C','D'].indexOf(letter)*.06}s">
                         <span class="sv-res-badge ${letter}">${letter}</span>
                         <span>${esc(ans.text)}</span>
-                        ${isCorrectAns ? '<span style="margin-left:auto">✅</span>' : ''}
-                        ${isMyWrong    ? '<span style="margin-left:auto">👈</span>' : ''}
+                        ${isCorrectAns ? '<span style="margin-left:auto;font-size:1.1rem">✅</span>' : ''}
+                        ${isMyWrong    ? '<span style="margin-left:auto;font-size:1.1rem">👆</span>' : ''}
                     </div>`;
         }).join('');
     }
 
     // Cộng điểm
-    if (isCorrect) {
+    if (isCorrect && appState.currentQId !== q.id + '_scored') {
+        appState.currentQId = q.id + '_scored'; // chống cộng 2 lần
         const cfg = session.gameSettings || {};
         if (cfg.scoringMode === 'by_time') {
             const totalMs  = (cfg.timePerQuestion || 15) * 1000;
             const ans      = session.answers?.find(a => a.questionId === q.id && a.studentId === appState.myStudentId);
             const elapsed  = ans?.questionStartedAt ? (ans.submittedAt - ans.questionStartedAt) : totalMs / 2;
             const frac     = Math.max(0, Math.min(1, 1 - elapsed / totalMs));
-            const pts      = Math.round((cfg.basePoints || 500) + ((cfg.maxPoints || 1000) - (cfg.basePoints || 500)) * frac);
-            appState.myTotalScore += pts;
+            appState.myTotalScore += Math.round((cfg.basePoints||500) + ((cfg.maxPoints||1000) - (cfg.basePoints||500)) * frac);
         } else {
             appState.myTotalScore += 1;
         }
@@ -470,17 +557,13 @@ function showResult(session) {
 /* ===== ENDED ===== */
 function showEnded(session) {
     showView('ended');
+    Sound.play('bell');
     $('#end-student-name').textContent = appState.myStudentName || '—';
 
-    const qTotal   = session?.questions?.length || 0;
-    const isTime   = session?.gameSettings?.scoringMode === 'by_time';
-    const scoreStr = isTime ? appState.myTotalScore : `${appState.myCorrect}/${qTotal}`;
-    $('#end-score-val').textContent = scoreStr;
-
-    const wrong    = qTotal - appState.myCorrect;
-    const noAns    = qTotal - appState.myCorrect - wrong; // simplified
-    const corEl = $('#end-correct-info');
-    if (corEl) corEl.textContent = `Đúng: ${appState.myCorrect} · Sai: ${qTotal - appState.myCorrect}`;
+    const qTotal = session?.questions?.length || 0;
+    const isTime = session?.gameSettings?.scoringMode === 'by_time';
+    $('#end-score-val').textContent = isTime ? appState.myTotalScore : `${appState.myCorrect}/${qTotal}`;
+    $('#end-correct-info').textContent = `Đúng: ${appState.myCorrect} · Sai: ${qTotal - appState.myCorrect}`;
 }
 
 /* ===== HELPERS ===== */
@@ -488,6 +571,6 @@ function setStatus(viewId, msg, type) {
     const map = { 'enter-code': '#enter-code-status', 'pick-name': '#pick-name-status' };
     const el  = $(map[viewId]);
     if (!el) return;
-    el.textContent  = msg;
-    el.className    = 'sv-status' + (type ? ' ' + type : '');
+    el.textContent = msg;
+    el.className   = 'sv-status' + (type ? ' ' + type : '');
 }
