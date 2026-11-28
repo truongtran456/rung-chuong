@@ -166,10 +166,14 @@ async function joinRoom(code) {
     // Kết nối OK — xin state ngay
     Sync.send({ type: 'REQUEST_STATE' });
 
-    // Poll mỗi 1.5s — đảm bảo luôn đồng bộ
+    // Poll mỗi 1.5s — đảm bảo luôn đồng bộ, dừng khi đã vào game
     Sync.pollLoop = setInterval(() => {
-        if (Sync.conn?.open) Sync.send({ type: 'REQUEST_STATE' });
-    }, 1500);
+        if (!Sync.conn?.open) return;
+        // Chỉ poll khi chưa vào câu hỏi (tránh nhiễu khi đang thi)
+        const status = appState.session?.status;
+        if (status === SESSION_STATUS.QUESTION_ACTIVE || status === SESSION_STATUS.COMPLETED) return;
+        Sync.send({ type: 'REQUEST_STATE' });
+    }, 2000);
 
     // Reconnect loop ngoài
     Sync.reconnectLoop = setInterval(async () => {
@@ -503,37 +507,54 @@ function showResult(session) {
     const isCorrect = myAns === q.correctAnswer;
     const noAns     = !myAns;
 
-    // Banner kết quả
+    // Banner kết quả của BẢN THÂN — rõ ràng + animation
     const banner = $('#sv-result-banner');
     if (banner) {
-        if (noAns)          { banner.textContent = '⏰ Hết giờ!';                     banner.className = 'sv-result-banner timeout'; }
-        else if (isCorrect) { banner.textContent = '✅ CHÍNH XÁC!';                    banner.className = 'sv-result-banner correct'; }
-        else                { banner.textContent = `❌ Sai rồi! Đúng là: ${q.correctAnswer}`; banner.className = 'sv-result-banner wrong'; }
+        if (noAns)          { banner.textContent = '⏰ Hết giờ!'; banner.className = 'sv-result-banner timeout'; }
+        else if (isCorrect) { banner.textContent = '✅ CHÍNH XÁC!'; banner.className = 'sv-result-banner correct'; }
+        else                { banner.textContent = `❌ Sai! Đúng là ${q.correctAnswer}`; banner.className = 'sv-result-banner wrong'; }
     }
 
-    if (isCorrect)  Sound.play('correct');
+    if (isCorrect)   Sound.play('correct');
     else if (!noAns) Sound.play('wrong');
 
-    // 4 đáp án với highlight kết quả
-    const resEl = $('#sv-result-answers');
+    // 4 đáp án: chỉ hiện đáp án đúng, đáp án mình chọn, % chọn — KHÔNG hiện tên ai
+    const allAns = session.answers?.filter(a => a.questionId === q.id && a.answer) || [];
+    const total  = session.students?.length || 1;
+    const resEl  = $('#sv-result-answers');
     if (resEl) {
-        resEl.innerHTML = ['A','B','C','D'].map(letter => {
-            const ans = q.answers?.find(a => a.id === letter) || { text: '' };
+        resEl.innerHTML = ['A','B','C','D'].map((letter, li) => {
+            const ans        = q.answers?.find(a => a.id === letter) || { text: '' };
             const isCorrectAns = letter === q.correctAnswer;
-            const isMyWrong    = letter === myAns && !isCorrectAns;
-            const cls = isCorrectAns ? 'correct-ans' : isMyWrong ? 'my-ans-wrong' : 'other';
-            return `<div class="sv-res-ans-item ${cls}" style="animation:slideIn .3s ease both;animation-delay:${['A','B','C','D'].indexOf(letter)*.06}s">
-                        <span class="sv-res-badge ${letter}">${letter}</span>
-                        <span>${esc(ans.text)}</span>
-                        ${isCorrectAns ? '<span style="margin-left:auto;font-size:1.1rem">✅</span>' : ''}
-                        ${isMyWrong    ? '<span style="margin-left:auto;font-size:1.1rem">👆</span>' : ''}
-                    </div>`;
+            const isMyPick   = letter === myAns;
+            const cnt        = allAns.filter(a => a.answer === letter).length;
+            const pct        = Math.round(cnt / total * 100);
+            let cls = 'other';
+            if (isCorrectAns && isMyPick)  cls = 'correct-ans';
+            else if (isCorrectAns)         cls = 'correct-ans';
+            else if (isMyPick)             cls = 'my-ans-wrong';
+
+            return `<div class="sv-res-ans-item ${cls}" style="animation:slideIn .3s ease both;animation-delay:${li*.07}s">
+                <span class="sv-res-badge ${letter}">${letter}</span>
+                <div style="flex:1">
+                    <div>${esc(ans.text)}</div>
+                    <div class="sv-res-bar-wrap">
+                        <div class="sv-res-bar" style="width:${pct}%;background:${isCorrectAns?'#22a06b':isMyPick?'#e84040':'rgba(255,255,255,.2)'}"></div>
+                        <span class="sv-res-pct">${pct}%</span>
+                    </div>
+                </div>
+                <div style="margin-left:.5rem;font-size:1.1rem">
+                    ${isCorrectAns ? '✅' : ''}
+                    ${isMyPick && !isCorrectAns ? '👆' : ''}
+                    ${isMyPick && isCorrectAns ? '👆' : ''}
+                </div>
+            </div>`;
         }).join('');
     }
 
-    // Cộng điểm
+    // Cộng điểm (chống cộng 2 lần)
     if (isCorrect && appState.currentQId !== q.id + '_scored') {
-        appState.currentQId = q.id + '_scored'; // chống cộng 2 lần
+        appState.currentQId = q.id + '_scored';
         const cfg = session.gameSettings || {};
         if (cfg.scoringMode === 'by_time') {
             const totalMs  = (cfg.timePerQuestion || 15) * 1000;
@@ -554,7 +575,7 @@ function showResult(session) {
     }
 }
 
-/* ===== ENDED ===== */
+/* ===== ENDED — hiện xếp hạng bản thân ===== */
 function showEnded(session) {
     showView('ended');
     Sound.play('bell');
@@ -563,7 +584,19 @@ function showEnded(session) {
     const qTotal = session?.questions?.length || 0;
     const isTime = session?.gameSettings?.scoringMode === 'by_time';
     $('#end-score-val').textContent = isTime ? appState.myTotalScore : `${appState.myCorrect}/${qTotal}`;
-    $('#end-correct-info').textContent = `Đúng: ${appState.myCorrect} · Sai: ${qTotal - appState.myCorrect}`;
+    $('#end-correct-info').textContent = `✅ Đúng: ${appState.myCorrect}  ❌ Sai: ${qTotal - appState.myCorrect}`;
+
+    // Tính xếp hạng bản thân dựa trên results từ session
+    const results = session?.results;
+    if (results && appState.myStudentId) {
+        const myRank = results.find(r => r.studentId === appState.myStudentId);
+        const rankEl = $('#end-rank-info');
+        if (rankEl && myRank) {
+            const medals = ['🥇','🥈','🥉'];
+            const icon = myRank.rank <= 3 ? medals[myRank.rank-1] : `#${myRank.rank}`;
+            rankEl.innerHTML = `<div class="end-rank-badge">${icon} Xếp hạng ${myRank.rank} / ${results.length}</div>`;
+        }
+    }
 }
 
 /* ===== HELPERS ===== */

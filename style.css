@@ -145,3 +145,12 @@ body::before {
 @keyframes urgentPulse { from{transform:scale(1)} to{transform:scale(1.2)} }
 .sv-ans-btn { transition: transform .1s, box-shadow .15s, opacity .15s; }
 .sv-ans-btn:hover:not(:disabled) { filter: brightness(1.1); transform: scale(1.02); }
+
+/* result bar */
+.sv-res-bar-wrap { display: flex; align-items: center; gap: .4rem; margin-top: .25rem; }
+.sv-res-bar { height: 5px; border-radius: 3px; min-width: 2px; transition: width .5s cubic-bezier(.4,0,.2,1) .2s; max-width: 100%; }
+.sv-res-pct { font-size: .72rem; color: rgba(255,255,255,.55); min-width: 28px; }
+/* end rank */
+.end-rank-info { margin-top: .6rem; }
+.end-rank-badge { display: inline-block; background: rgba(245,166,35,.2); border: 1px solid rgba(245,166,35,.5); color: var(--gold-bright); padding: .3rem .9rem; border-radius: 20px; font-weight: 700; font-size: .9rem; animation: popIn .5s cubic-bezier(.34,1.56,.64,1) both; }
+@keyframes popIn { 0%{transform:scale(.4);opacity:0} 70%{transform:scale(1.1)} 100%{transform:scale(1);opacity:1} }
